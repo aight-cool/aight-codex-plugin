@@ -40,10 +40,11 @@ let threadId: string | null = null;
 let activeTurnId: string | null = null;
 // itemId → accumulated agent message text (Codex streams deltas)
 const pendingAgentText: Map<string, string> = new Map();
-// approvalId → unresolved request (resolve when phone responds)
+// relay approval id → JSON-RPC request id + timeout cleanup
+// (the relay-side id maps the chip in the app to a pending Codex request)
 const pendingApprovals: Map<
   string,
-  { resolve: (decision: "accept" | "decline") => void; timeoutHandle: NodeJS.Timeout }
+  { requestId: number | string; timeoutHandle: NodeJS.Timeout }
 > = new Map();
 
 // ─── Setup ──────────────────────────────────────────────────────────────────
@@ -55,7 +56,7 @@ codex.on("error", (err) => {
 codex.on("exit", (code, sig) => {
   console.error(`[codex-client] exited (code=${code}, signal=${sig})`);
   // Decline any pending approvals so the relay/app sees a final state.
-  for (const [id] of pendingApprovals) sendApprovalResolve(id, "decline");
+  for (const [id] of pendingApprovals) sendApprovalDecision(id, "denied");
   process.exit(code ?? 1);
 });
 
@@ -64,17 +65,17 @@ await codex.initialize({ name: "aight-codex-plugin", version: "0.1.0" });
 try {
   const result = await codex.startThread({
     cwd: process.cwd(),
-    approvalPolicy: "never",
-    sandbox: "workspace_write",
+    approvalPolicy: "on-request",
+    sandbox: "workspace-write",
   });
   threadId = result.thread.id;
   console.error(`[aight-codex] thread started: ${threadId}`);
 } catch (err) {
-  console.error(
-    `[aight-codex] Failed to start codex thread. ` +
-      `Make sure you're signed in: \`codex login\``,
-  );
-  console.error(err);
+  const e = err as { message?: string; code?: number };
+  console.error(`[aight-codex] Failed to start codex thread: ${e.message ?? err}`);
+  if (e.code === -32600 || /unauthorized|sign.in|login/i.test(e.message ?? "")) {
+    console.error(`[aight-codex] If you haven't authenticated, run: codex login`);
+  }
   process.exit(2);
 }
 
@@ -156,61 +157,80 @@ codex.on("notification", (method: string, params: unknown) => {
       }
       break;
     }
-    case "item/commandExecution/requestApproval":
-    case "item/fileChange/requestApproval": {
-      // Forward outside-cwd / network / shell-escalation requests to the app.
-      // Inside-cwd cases are already auto-approved by approvalPolicy:"never"
-      // + sandbox:"workspace_write" — the ones that reach this branch are
-      // genuinely sensitive.
-      const item = p.item as
-        | { id?: string; details?: Record<string, unknown> }
-        | undefined;
-      if (!item?.id) break;
-      const kind: "command" | "fileChange" | "network" =
-        method.includes("commandExecution") ? "command" : "fileChange";
-      const summary = summarizeApproval(item, kind);
-      const approvalId = `approval_${item.id}`;
-      relay.send({
-        type: "approval_request",
-        id: approvalId,
-        approvalKind: kind,
-        approvalSummary: summary,
-        approvalDetails: JSON.stringify(item.details ?? {}, null, 2).slice(0, 1024),
-        outsideWorkspace: true,
-        timestamp: new Date().toISOString(),
-      });
-      // Wait up to 60s; if no response, decline.
-      const timeoutHandle = setTimeout(() => {
-        if (pendingApprovals.has(approvalId)) {
-          console.error(`[aight-codex] approval ${approvalId} expired — declining`);
-          sendApprovalResolve(approvalId, "decline");
-        }
-      }, 60_000);
-      pendingApprovals.set(approvalId, {
-        resolve: (decision) => sendApprovalResolve(approvalId, decision),
-        timeoutHandle,
-      });
-      break;
-    }
   }
 });
 
-function sendApprovalResolve(approvalId: string, decision: "accept" | "decline") {
+// Server-initiated JSON-RPC requests from Codex (approvals, etc).
+// Schema source: `codex app-server generate-ts` (ServerRequest.ts).
+codex.on("request", (method: string, params: unknown, requestId: number | string) => {
+  if (
+    method !== "item/commandExecution/requestApproval" &&
+    method !== "item/fileChange/requestApproval"
+  ) {
+    // Decline anything we don't understand — safer than hanging the turn.
+    codex.respondError(requestId, -32601, `unsupported approval method: ${method}`);
+    return;
+  }
+
+  const p = (params ?? {}) as Record<string, unknown>;
+  const kind: "command" | "fileChange" = method.includes("commandExecution")
+    ? "command"
+    : "fileChange";
+  const summary = summarizeApprovalParams(p, kind);
+  const approvalId = `approval_${String(p.itemId ?? requestId)}`;
+
+  relay.send({
+    type: "approval_request",
+    id: approvalId,
+    approvalKind: kind,
+    approvalSummary: summary,
+    approvalDetails: stringifyDetails(p),
+    outsideWorkspace: true,
+    timestamp: new Date().toISOString(),
+  });
+
+  const timeoutHandle = setTimeout(() => {
+    if (pendingApprovals.has(approvalId)) {
+      console.error(`[aight-codex] approval ${approvalId} expired — declining`);
+      sendApprovalDecision(approvalId, "timed_out");
+    }
+  }, 60_000);
+  pendingApprovals.set(approvalId, { requestId, timeoutHandle });
+});
+
+type ReviewDecision = "approved" | "denied" | "timed_out" | "abort";
+
+function sendApprovalDecision(approvalId: string, decision: ReviewDecision) {
   const pending = pendingApprovals.get(approvalId);
   if (!pending) return;
   clearTimeout(pending.timeoutHandle);
   pendingApprovals.delete(approvalId);
-  // NOTE: pin this method name + payload via `codex app-server generate-ts`
-  // before shipping. Docs hint at `serverRequest/resolve` but the exact name
-  // may differ by Codex CLI version.
-  codex
-    .request("serverRequest/resolve", {
-      requestId: approvalId.replace(/^approval_/, ""),
-      decision,
-    })
-    .catch((err: unknown) => {
-      console.error(`[aight-codex] approval resolve failed: ${err}`);
-    });
+  codex.respond(pending.requestId, { decision });
+}
+
+function stringifyDetails(params: Record<string, unknown>): string {
+  try {
+    return JSON.stringify(params, null, 2).slice(0, 1024);
+  } catch {
+    return "";
+  }
+}
+
+function summarizeApprovalParams(
+  p: Record<string, unknown>,
+  kind: "command" | "fileChange",
+): string {
+  if (kind === "command") {
+    const cmd = p.command as string | undefined;
+    if (cmd) return cmd;
+    const reason = p.reason as string | undefined;
+    if (reason) return reason;
+    return "Codex wants to run a command outside the workspace";
+  }
+  // fileChange — schema doesn't include the path, just threadId/turnId/itemId/reason.
+  // Best we can show is the reason.
+  const reason = p.reason as string | undefined;
+  return reason ?? "Codex wants to make a file change outside the workspace";
 }
 
 function summarizeItem(item: { type?: string; details?: unknown }): string {
@@ -259,13 +279,17 @@ async function handleInboundMessage(data: InboundMessage): Promise<void> {
   if (!threadId) return;
 
   // Approval response from app — resolve the pending Codex request.
+  // The phone sends "accept"/"decline"; Codex's ReviewDecision is
+  // "approved"/"denied". Translate here so the wire protocol with the app
+  // stays human-friendly.
   if (
     (data as { type?: string }).type === "approval_response" &&
-    (data as { id?: string; decision?: "accept" | "decline" }).id
+    (data as { id?: string }).id
   ) {
     const d = data as { id: string; decision: "accept" | "decline" };
-    const pending = pendingApprovals.get(d.id);
-    if (pending) pending.resolve(d.decision);
+    const codexDecision: ReviewDecision =
+      d.decision === "accept" ? "approved" : "denied";
+    sendApprovalDecision(d.id, codexDecision);
     return;
   }
 
@@ -367,7 +391,7 @@ function cleanup() {
       }
     }
   }
-  for (const [id] of pendingApprovals) sendApprovalResolve(id, "decline");
+  for (const [id] of pendingApprovals) sendApprovalDecision(id, "denied");
   codex.close().catch(() => undefined);
 }
 process.on("exit", cleanup);

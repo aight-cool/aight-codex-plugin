@@ -87,15 +87,19 @@ export class CodexClient extends EventEmitter {
   }
 
   private handleMessage(msg: {
-    id?: number;
+    id?: number | string;
     method?: string;
     params?: Record<string, unknown>;
     result?: unknown;
     error?: { code: number; message: string; data?: unknown };
   }): void {
-    if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
-      const pending = this.pending.get(msg.id);
-      if (!pending) return;
+    // Response to a request we originated.
+    if (
+      typeof msg.id === "number" &&
+      this.pending.has(msg.id) &&
+      (msg.result !== undefined || msg.error !== undefined)
+    ) {
+      const pending = this.pending.get(msg.id)!;
       this.pending.delete(msg.id);
       if (msg.error) {
         pending.reject(
@@ -109,9 +113,29 @@ export class CodexClient extends EventEmitter {
       }
       return;
     }
+    // Server-initiated request — has id + method, but no result/error.
+    if (msg.method && msg.id !== undefined) {
+      this.emit("request", msg.method, msg.params, msg.id);
+      return;
+    }
+    // Server notification — has method, no id.
     if (msg.method) {
       this.emit("notification", msg.method, msg.params);
     }
+  }
+
+  /** Respond to a server-initiated request. */
+  respond(requestId: number | string, result: unknown): void {
+    this.write({ id: requestId, result });
+  }
+
+  /** Respond to a server-initiated request with an error. */
+  respondError(
+    requestId: number | string,
+    code: number,
+    message: string,
+  ): void {
+    this.write({ id: requestId, error: { code, message } });
   }
 
   /** Send a JSON-RPC request and await the response. */
@@ -175,10 +199,14 @@ export class CodexClient extends EventEmitter {
     return result;
   }
 
+  /**
+   * Start a new thread. Values match the Codex schema (`SandboxMode`,
+   * `AskForApproval`) — note the hyphenated kebab-case for sandbox values.
+   */
   startThread(opts: {
     cwd: string;
-    approvalPolicy?: "never" | "untrusted" | "on_request";
-    sandbox?: "read_only" | "workspace_write" | "danger_full_access";
+    approvalPolicy?: "untrusted" | "on-failure" | "on-request" | "never";
+    sandbox?: "read-only" | "workspace-write" | "danger-full-access";
     model?: string;
   }): Promise<{ thread: { id: string } }> {
     return this.request<{ thread: { id: string } }>("thread/start", opts);

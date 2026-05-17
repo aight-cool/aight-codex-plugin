@@ -131,6 +131,7 @@ codex.on("notification", (method: string, params: unknown) => {
           relay.send({
             type: "reply",
             id: `codex_${++messageCounter}`,
+            replyTo: null,
             content: text,
             sender: {
               id: "codex",
@@ -311,6 +312,7 @@ async function handleInboundMessage(data: InboundMessage): Promise<void> {
     relay.send({
       type: "reply",
       id: `codex_err_${++messageCounter}`,
+      replyTo: null,
       content:
         "I couldn't send that to Codex. If you just signed in, try again. " +
         "If this keeps happening, run `codex login` in your terminal.",

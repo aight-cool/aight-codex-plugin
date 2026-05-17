@@ -117,8 +117,20 @@ export interface OutboundToolEvent {
   type: "tool_event";
   event: "start" | "end" | "error" | "subagent_start" | "subagent_end";
   tool: string;
-  input: string;
+  /** Required for "start" events; "end"/"error" omit it. */
+  input?: string;
   error?: string;
+  timestamp: string;
+}
+
+/** Codex-specific: forward an approval request to the phone for accept/deny. */
+export interface OutboundApprovalRequest {
+  type: "approval_request";
+  id: string;
+  approvalKind: "command" | "fileChange" | "network";
+  approvalSummary: string;
+  approvalDetails?: string;
+  outsideWorkspace?: boolean;
   timestamp: string;
 }
 
@@ -152,7 +164,8 @@ export type OutboundMessage =
   | OutboundSkillsList
   | OutboundPing
   | OutboundPong
-  | OutboundAuth;
+  | OutboundAuth
+  | OutboundApprovalRequest;
 
 // ── Shared types ──
 

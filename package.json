@@ -1,0 +1,14 @@
+{
+  "name": "aight-codex",
+  "version": "0.1.0",
+  "description": "Aight mobile channel for OpenAI Codex CLI — chat with your Codex session from your phone via cloud relay",
+  "type": "module",
+  "bin": "./src/index.ts",
+  "scripts": {
+    "start": "bun install --no-summary && bun src/index.ts",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0"
+  }
+}

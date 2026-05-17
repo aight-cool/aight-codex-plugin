@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# aight-codex setup — installs deps and registers an `aight-codex` shell command.
+set -euo pipefail
+
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.codex/channels/aight}"
+SHELL_RC="${SHELL_RC:-}"
+
+# Detect rc file from $SHELL if not overridden.
+if [ -z "$SHELL_RC" ]; then
+  case "${SHELL:-}" in
+    */zsh) SHELL_RC="$HOME/.zshrc" ;;
+    */bash) SHELL_RC="$HOME/.bashrc" ;;
+    *) SHELL_RC="$HOME/.profile" ;;
+  esac
+fi
+
+echo "→ Installing dependencies in $INSTALL_DIR …"
+cd "$INSTALL_DIR"
+bun install --no-summary
+
+# Idempotent: only append the function if it isn't there yet.
+if ! grep -q "# aight-codex — Codex CLI mobile channel" "$SHELL_RC" 2>/dev/null; then
+  cat <<'EOF' >> "$SHELL_RC"
+
+# aight-codex — Codex CLI mobile channel
+aight-codex() {
+  bun run --cwd "$HOME/.codex/channels/aight" --silent start
+}
+EOF
+  echo "✓ Added \`aight-codex\` shell function to $SHELL_RC"
+else
+  echo "✓ \`aight-codex\` shell function already present in $SHELL_RC"
+fi
+
+echo
+echo "Done. Open a new terminal (or run \`source $SHELL_RC\`) and run:"
+echo "  aight-codex"
+echo
+echo "A 6-digit pairing code will appear. Enter it in the Aight app."

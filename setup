@@ -20,11 +20,11 @@ bun install --no-summary
 
 # Idempotent: only append the function if it isn't there yet.
 if ! grep -q "# aight-codex — Codex CLI mobile channel" "$SHELL_RC" 2>/dev/null; then
-  cat <<'EOF' >> "$SHELL_RC"
+  cat <<EOF >> "$SHELL_RC"
 
 # aight-codex — Codex CLI mobile channel
 aight-codex() {
-  bun run --cwd "$HOME/.codex/channels/aight" --silent start
+  (cd "$INSTALL_DIR" && bun src/index.ts "\$@")
 }
 EOF
   echo "✓ Added \`aight-codex\` shell function to $SHELL_RC"

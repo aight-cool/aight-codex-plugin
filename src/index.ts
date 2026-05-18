@@ -31,6 +31,12 @@ const CODEX_BIN = process.env.CODEX_BIN || "codex";
 const STATE_DIR = join(homedir(), ".codex", "channels", "aight");
 const INBOX_DIR = join(STATE_DIR, "inbox");
 const CODE_FILE = join(STATE_DIR, `pairing-code-${process.pid}.txt`);
+// The shell function `cd`s into the plugin dir for bun's dep resolution, so
+// process.cwd() ends up pointing at the plugin instead of where the user ran
+// `aight-codex`. The setup script forwards the user's invocation cwd via
+// AIGHT_CODEX_CWD; fall back to process.cwd() if it's missing (e.g. direct
+// `bun src/index.ts` invocation from inside the plugin dir).
+const threadCwd = process.env.AIGHT_CODEX_CWD || process.cwd();
 
 mkdirSync(INBOX_DIR, { recursive: true, mode: 0o700 });
 
@@ -49,7 +55,7 @@ const pendingApprovals: Map<
 
 // ─── Setup ──────────────────────────────────────────────────────────────────
 
-const codex = new CodexClient({ cwd: process.cwd(), codexBin: CODEX_BIN });
+const codex = new CodexClient({ cwd: threadCwd, codexBin: CODEX_BIN });
 codex.on("error", (err) => {
   console.error(`[codex-client] error: ${err.message}`);
 });
@@ -64,12 +70,12 @@ await codex.initialize({ name: "aight-codex-plugin", version: "0.1.0" });
 
 try {
   const result = await codex.startThread({
-    cwd: process.cwd(),
+    cwd: threadCwd,
     approvalPolicy: "on-request",
     sandbox: "workspace-write",
   });
   threadId = result.thread.id;
-  console.error(`[aight-codex] thread started: ${threadId}`);
+  console.log(`[aight-codex] thread started: ${threadId} (cwd: ${threadCwd})`);
 } catch (err) {
   const e = err as { message?: string; code?: number };
   console.error(`[aight-codex] Failed to start codex thread: ${e.message ?? err}`);
@@ -362,7 +368,7 @@ const relay = new RelayClient(RELAY_URL, {
     await handleInboundMessage(data);
   },
   onStateChange: (state) => {
-    console.error(`[aight-codex-relay] state: ${state}`);
+    console.log(`[aight-codex-relay] state: ${state}`);
   },
   onPairingCode: (code) => {
     process.stderr.write(`\n[aight-codex] ════════════════════════════════════════\n`);
@@ -413,5 +419,5 @@ void statSync;
 void basename;
 void extname;
 
-console.error(`[aight-codex] Connecting to relay at ${RELAY_URL}`);
+console.log(`[aight-codex] Connecting to relay at ${RELAY_URL}`);
 await relay.start();

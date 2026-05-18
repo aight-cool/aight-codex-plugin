@@ -29,7 +29,11 @@ END_MARKER="# aight-codex — END"
 BLOCK=$(cat <<EOF
 $START_MARKER
 aight-codex() {
-  (cd "$INSTALL_DIR" && bun src/index.ts "\$@")
+  # Capture the user's invocation cwd before cd'ing into the plugin dir
+  # (the cd is needed so bun resolves the plugin's node_modules; the env
+  # var carries the original cwd through to codex app-server).
+  local _aight_cwd="\$PWD"
+  (cd "$INSTALL_DIR" && AIGHT_CODEX_CWD="\$_aight_cwd" bun src/index.ts "\$@")
 }
 $END_MARKER
 EOF

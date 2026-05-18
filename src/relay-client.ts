@@ -41,6 +41,9 @@ export class RelayClient {
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
   private intentionalClose = false;
+  /** True once the mobile app has paired at least once in this process — used
+   * to suppress noisy re-pair logs across screen-transition reconnect cycles. */
+  private hasEverPaired = false;
 
   constructor(relayUrl: string, callbacks: RelayClientCallbacks) {
     this.relayUrl = relayUrl.replace(/\/+$/, "");
@@ -87,7 +90,7 @@ export class RelayClient {
 
     this.closeExistingSocket();
 
-    console.error(`[aight-relay] Connecting to relay...`);
+    console.log(`[aight-relay] Connecting to relay...`);
     this.callbacks.onStateChange("connecting");
 
     const wsBase = this.relayUrl.replace(/^http/, "ws");
@@ -103,7 +106,7 @@ export class RelayClient {
     }
 
     this.ws.addEventListener("open", () => {
-      console.error(`[aight-relay] WebSocket open, authenticating...`);
+      console.log(`[aight-relay] WebSocket open, authenticating...`);
       // H3: send token as first message, not in URL
       this.ws!.send(
         JSON.stringify({
@@ -144,13 +147,23 @@ export class RelayClient {
       if (msg.type === "auth_required") return;
 
       if (msg.type === "waiting_for_pair") {
-        console.error(`[aight-relay] Waiting for app to pair...`);
+        // First-time pairing only — re-pair on reconnect would re-log this
+        // every cycle. The pairing code is already printed loudly above.
+        if (!this.hasEverPaired) {
+          console.log(`[aight-relay] Waiting for app to pair...`);
+        }
         return;
       }
 
-      // Paired / reconnected — notify app we're connected
+      // Paired / reconnected — notify app we're connected. Only log on
+      // first pair; subsequent partner_connected/disconnected cycles are
+      // the app's chat screen mounting/unmounting on navigation, which we
+      // don't want to spam the terminal about.
       if (msg.type === "paired" || msg.type === "partner_connected") {
-        console.error(`[aight-relay] ${msg.type === "paired" ? "App paired successfully!" : "App connected"}`);
+        if (!this.hasEverPaired) {
+          console.log(`[aight-relay] App paired successfully!`);
+          this.hasEverPaired = true;
+        }
         this.send({
           type: "connected",
           channelName: "aight",
@@ -160,8 +173,11 @@ export class RelayClient {
         return;
       }
 
+      // Partner disconnect is normal during nav transitions — skip the noise.
       if (msg.type === "partner_disconnected") {
-        console.error(`[aight-relay] App disconnected`);
+        if (process.env.AIGHT_DEBUG) {
+          console.log(`[aight-relay] App disconnected`);
+        }
         return;
       }
 
@@ -173,7 +189,7 @@ export class RelayClient {
     this.ws.addEventListener("close", () => {
       this.stopPing();
       if (!this.intentionalClose) {
-        console.error(`[aight-relay] Disconnected, reconnecting...`);
+        console.log(`[aight-relay] Disconnected, reconnecting...`);
         this.callbacks.onStateChange("disconnected");
         this.scheduleReconnect();
       }

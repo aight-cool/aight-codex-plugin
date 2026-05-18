@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.log
+
+# Local gstack working dir (security reports, learnings, telemetry)
+.gstack/
+
+# Plugin runtime state. The README install path puts STATE_DIR
+# (~/.codex/channels/aight) inside the git working tree, so guard against
+# accidental commits of pairing codes and inbox attachments.
+pairing-code-*.txt
+inbox/
+
+# Local env / secrets
+.env
+.env.*
+!.env.example

@@ -262,6 +262,11 @@ export function parseInboundMessage(raw: unknown): InboundMessage | null {
       return msg as unknown as RelayReconnected;
     case "auth_required":
       return { type: "auth_required" };
+    case "approval_response": {
+      if (typeof msg.id !== "string") return null;
+      if (msg.decision !== "accept" && msg.decision !== "decline") return null;
+      return msg as unknown as AppApprovalResponse;
+    }
     default:
       return null;
   }

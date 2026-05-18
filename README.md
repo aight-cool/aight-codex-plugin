@@ -50,7 +50,11 @@ A 6-digit pairing code appears in the terminal. Enter it in the Aight app under 
 
 ### Approval policy
 
-Codex runs with `approvalPolicy: "never"` and `sandbox: "workspace_write"` by default — any operation *inside* the current working directory is auto-approved silently. Anything that escapes the workspace (network access, shell escalation, files outside cwd) is forwarded to the Aight app as an `approval_request`. You tap Approve or Deny on the phone. If you don't respond within 60 seconds, the request auto-declines.
+Codex runs with `approvalPolicy: "on-request"` and `sandbox: "workspace-write"` by default — any operation *inside* the current working directory is auto-approved silently. Anything that escapes the workspace (network access, shell escalation, files outside cwd) is forwarded to the Aight app as an `approval_request`. You tap Approve or Deny on the phone. If you don't respond within 60 seconds, the request auto-declines.
+
+### Trust model
+
+The plugin authenticates to the relay over WSS (TLS-protected transport), but there is no end-to-end MAC between the phone and the plugin: any message that arrives on the post-pair WebSocket is treated as having come from the paired phone. The relay (`channels.aight.cool`) is therefore part of your trust base — a compromised relay could inject `turn/start` text into your Codex session (constrained by the `workspace-write` sandbox). End-to-end signed messages under a key derived at pair time are on the roadmap.
 
 ## Environment
 

@@ -24,7 +24,7 @@ import { homedir } from "os";
 import { CodexClient } from "./codex-client";
 import { RelayClient } from "./relay-client";
 import { type InboundMessage, type InboundAttachment, LIMITS } from "./protocol";
-import { MIME_MAP, sanitizeFileName, createRateLimiter } from "./utils";
+import { MIME_MAP, sanitizeFileName, createRateLimiter, cleanInbox } from "./utils";
 
 const RELAY_URL = process.env.AIGHT_RELAY_URL || "https://channels.aight.cool";
 const CODEX_BIN = process.env.CODEX_BIN || "codex";
@@ -39,6 +39,7 @@ const CODE_FILE = join(STATE_DIR, `pairing-code-${process.pid}.txt`);
 const threadCwd = process.env.AIGHT_CODEX_CWD || process.cwd();
 
 mkdirSync(INBOX_DIR, { recursive: true, mode: 0o700 });
+cleanInbox(INBOX_DIR, LIMITS.MAX_INBOX_SIZE);
 
 const rateLimiter = createRateLimiter();
 let messageCounter = 0;
@@ -211,7 +212,10 @@ function sendApprovalDecision(approvalId: string, decision: ReviewDecision) {
   if (!pending) return;
   clearTimeout(pending.timeoutHandle);
   pendingApprovals.delete(approvalId);
-  codex.respond(pending.requestId, { decision });
+  // Codex's wire-level ReviewDecision is "approved"|"denied". Map our local
+  // labels (timed_out, abort) onto "denied" so Codex receives a valid value.
+  const wireDecision = decision === "approved" ? "approved" : "denied";
+  codex.respond(pending.requestId, { decision: wireDecision });
 }
 
 function stringifyDetails(params: Record<string, unknown>): string {
@@ -253,26 +257,12 @@ function summarizeItem(item: { type?: string; details?: unknown }): string {
   return item.type ?? "unknown";
 }
 
-function summarizeApproval(
-  item: { details?: Record<string, unknown> },
-  kind: "command" | "fileChange" | "network",
-): string {
-  const d = item.details ?? {};
-  if (kind === "command") {
-    const cmd = d.command as string[] | string | undefined;
-    if (Array.isArray(cmd)) return cmd.join(" ");
-    if (typeof cmd === "string") return cmd;
-  }
-  if (kind === "fileChange") {
-    const path = d.path as string | undefined;
-    if (path) return `Edit ${path}`;
-  }
-  return kind;
-}
-
 // ─── Relay → Codex ──────────────────────────────────────────────────────────
 
 function saveAttachment(att: InboundAttachment): string {
+  // Reap stale + cap-evict before writing so a paired peer can't fill
+  // local disk by streaming attachments at the per-minute rate limit forever.
+  cleanInbox(INBOX_DIR, LIMITS.MAX_INBOX_SIZE);
   const ts = Date.now();
   const safeName = sanitizeFileName(att.fileName);
   const filePath = join(INBOX_DIR, `${ts}-${safeName}`);
@@ -284,18 +274,13 @@ function saveAttachment(att: InboundAttachment): string {
 async function handleInboundMessage(data: InboundMessage): Promise<void> {
   if (!threadId) return;
 
-  // Approval response from app — resolve the pending Codex request.
   // The phone sends "accept"/"decline"; Codex's ReviewDecision is
   // "approved"/"denied". Translate here so the wire protocol with the app
   // stays human-friendly.
-  if (
-    (data as { type?: string }).type === "approval_response" &&
-    (data as { id?: string }).id
-  ) {
-    const d = data as { id: string; decision: "accept" | "decline" };
+  if (data.type === "approval_response") {
     const codexDecision: ReviewDecision =
-      d.decision === "accept" ? "approved" : "denied";
-    sendApprovalDecision(d.id, codexDecision);
+      data.decision === "accept" ? "approved" : "denied";
+    sendApprovalDecision(data.id, codexDecision);
     return;
   }
 
@@ -413,9 +398,7 @@ process.on("SIGTERM", () => {
 // Reference the imports so the build doesn't tree-shake helpers we'll need
 // when attachments and outbound files are wired in v2.
 void MIME_MAP;
-void LIMITS;
 void readFileSync;
-void statSync;
 void basename;
 void extname;
 

@@ -40,14 +40,19 @@ EOF
 )
 
 if [ -f "$SHELL_RC" ] && grep -qF "$START_MARKER" "$SHELL_RC"; then
-  # Replace existing block in-place.
+  # Replace existing block in-place. BSD awk (macOS) chokes on multi-line
+  # -v strings, so write the new block to a temp file and pull it in via
+  # getline — works on both BSD and GNU awk.
   TMP=$(mktemp)
-  awk -v start="$START_MARKER" -v end="$END_MARKER" -v block="$BLOCK" '
-    $0 == start { in_block = 1; print block; next }
+  BLOCK_FILE=$(mktemp)
+  printf '%s\n' "$BLOCK" > "$BLOCK_FILE"
+  awk -v start="$START_MARKER" -v end="$END_MARKER" -v blockfile="$BLOCK_FILE" '
+    $0 == start { in_block = 1; while ((getline line < blockfile) > 0) print line; close(blockfile); next }
     in_block && $0 == end { in_block = 0; next }
     !in_block { print }
   ' "$SHELL_RC" > "$TMP"
   mv "$TMP" "$SHELL_RC"
+  rm -f "$BLOCK_FILE"
   echo "✓ Refreshed \`aight-codex\` function in $SHELL_RC"
 else
   printf "\n%s\n" "$BLOCK" >> "$SHELL_RC"

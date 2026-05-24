@@ -96,11 +96,12 @@ codex.on("notification", (method: string, params: unknown) => {
     case "turn/started": {
       const turn = p.turn as { id?: string } | undefined;
       activeTurnId = turn?.id ?? null;
-      relay.send({ type: "typing", timestamp: new Date().toISOString() });
+      relay.send({ type: "turn_event", event: "started", timestamp: new Date().toISOString() });
       break;
     }
     case "turn/completed": {
       activeTurnId = null;
+      relay.send({ type: "turn_event", event: "ended", timestamp: new Date().toISOString() });
       break;
     }
     case "item/agentMessage/delta": {
@@ -129,7 +130,7 @@ codex.on("notification", (method: string, params: unknown) => {
     }
     case "item/completed": {
       const item = p.item as
-        | { id?: string; type?: string; status?: string }
+        | { id?: string; type?: string; status?: string; output?: string; exitCode?: number }
         | undefined;
       if (!item) break;
       if (item.type === "agentMessage") {
@@ -137,16 +138,8 @@ codex.on("notification", (method: string, params: unknown) => {
         pendingAgentText.delete(String(item.id));
         if (text.trim()) {
           relay.send({
-            type: "reply",
-            id: `codex_${++messageCounter}`,
-            replyTo: null,
+            type: "assistant_message",
             content: text,
-            sender: {
-              id: "codex",
-              name: "Codex",
-              emoji: "\u{1F9E0}",
-              username: "codex",
-            },
             timestamp: new Date().toISOString(),
           });
         }
@@ -155,10 +148,16 @@ codex.on("notification", (method: string, params: unknown) => {
         item.type === "fileChange" ||
         item.type === "mcpToolCall"
       ) {
+        const isFailed = item.status === "failed";
         relay.send({
           type: "tool_event",
-          event: item.status === "failed" ? "error" : "end",
+          event: isFailed ? "error" : "end",
           tool: item.type,
+          ...(item.output
+            ? isFailed
+              ? { error: item.output.slice(0, 500) }
+              : { result: item.output.slice(0, 500) }
+            : {}),
           timestamp: new Date().toISOString(),
         });
       }

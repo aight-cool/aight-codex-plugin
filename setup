@@ -29,9 +29,16 @@ END_MARKER="# aight-codex — END"
 BLOCK=$(cat <<EOF
 $START_MARKER
 aight-codex() {
-  # Capture the user's invocation cwd before cd'ing into the plugin dir
-  # (the cd is needed so bun resolves the plugin's node_modules; the env
-  # var carries the original cwd through to codex app-server).
+  # Auto-update from git (silent when up to date, skips on failure)
+  if [ -d "$INSTALL_DIR/.git" ]; then
+    local _old; _old=\$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null)
+    git -C "$INSTALL_DIR" pull --ff-only -q 2>/dev/null
+    local _new; _new=\$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null)
+    if [ "\$_old" != "\$_new" ]; then
+      echo "[aight] Updated to \$(git -C "$INSTALL_DIR" log -1 --format='%h %s' 2>/dev/null)"
+      (cd "$INSTALL_DIR" && bun install --no-summary 2>/dev/null)
+    fi
+  fi
   local _aight_cwd="\$PWD"
   (cd "$INSTALL_DIR" && AIGHT_CODEX_CWD="\$_aight_cwd" bun src/index.ts "\$@")
 }

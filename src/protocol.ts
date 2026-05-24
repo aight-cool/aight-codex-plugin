@@ -119,7 +119,20 @@ export interface OutboundToolEvent {
   tool: string;
   /** Required for "start" events; "end"/"error" omit it. */
   input?: string;
+  result?: string;
   error?: string;
+  timestamp: string;
+}
+
+export interface OutboundAssistantMessage {
+  type: "assistant_message";
+  content: string;
+  timestamp: string;
+}
+
+export interface OutboundTurnEvent {
+  type: "turn_event";
+  event: "started" | "ended";
   timestamp: string;
 }
 
@@ -161,6 +174,8 @@ export type OutboundMessage =
   | OutboundTyping
   | OutboundConnected
   | OutboundToolEvent
+  | OutboundAssistantMessage
+  | OutboundTurnEvent
   | OutboundSkillsList
   | OutboundPing
   | OutboundPong

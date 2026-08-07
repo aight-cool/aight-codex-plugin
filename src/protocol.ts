@@ -153,6 +153,18 @@ export interface OutboundSkillsList {
   timestamp: string;
 }
 
+export interface OutboundAskUserQuestion {
+  type: "ask_user_question";
+  questionId: string;
+  questions: Array<{
+    header: string;
+    question: string;
+    options: Array<{ label: string; description: string }>;
+    multiSelect: boolean;
+  }>;
+  timestamp: string;
+}
+
 export interface OutboundPing {
   type: "ping";
 }
@@ -180,7 +192,8 @@ export type OutboundMessage =
   | OutboundPing
   | OutboundPong
   | OutboundAuth
-  | OutboundApprovalRequest;
+  | OutboundApprovalRequest
+  | OutboundAskUserQuestion;
 
 // ── Shared types ──
 

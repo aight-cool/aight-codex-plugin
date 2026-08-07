@@ -40,6 +40,12 @@ aight-codex
 
 A 6-digit pairing code appears in the terminal. Enter it in the Aight app under Settings → Codex CLI.
 
+To run with the same unrestricted permissions as `codex --yolo`:
+
+```bash
+aight-codex --yolo
+```
+
 ## How it works
 
 1. `aight-codex` spawns `codex app-server` as a child process
@@ -52,9 +58,11 @@ A 6-digit pairing code appears in the terminal. Enter it in the Aight app under 
 
 Codex runs with `approvalPolicy: "on-request"` and `sandbox: "workspace-write"` by default — any operation *inside* the current working directory is auto-approved silently. Anything that escapes the workspace (network access, shell escalation, files outside cwd) is forwarded to the Aight app as an `approval_request`. You tap Approve or Deny on the phone. If you don't respond within 60 seconds, the request auto-declines.
 
+`--yolo` (or `--dangerously-bypass-approvals-and-sandbox`) changes the app-server thread to `approvalPolicy: "never"` and `sandbox: "danger-full-access"`, matching Codex CLI's unrestricted mode. Use it only in a workspace you trust.
+
 ### Trust model
 
-The plugin authenticates to the relay over WSS (TLS-protected transport), but there is no end-to-end MAC between the phone and the plugin: any message that arrives on the post-pair WebSocket is treated as having come from the paired phone. The relay (`channels.aight.cool`) is therefore part of your trust base — a compromised relay could inject `turn/start` text into your Codex session (constrained by the `workspace-write` sandbox). End-to-end signed messages under a key derived at pair time are on the roadmap.
+The plugin authenticates to the relay over WSS (TLS-protected transport), but there is no end-to-end MAC between the phone and the plugin: any message that arrives on the post-pair WebSocket is treated as having come from the paired phone. The relay (`channels.aight.cool`) is therefore part of your trust base — a compromised relay could inject `turn/start` text into your Codex session (constrained by the default `workspace-write` sandbox, but unrestricted under `--yolo`). End-to-end signed messages under a key derived at pair time are on the roadmap.
 
 ## Environment
 

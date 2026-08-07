@@ -25,6 +25,12 @@ import { CodexClient } from "./codex-client";
 import { RelayClient } from "./relay-client";
 import { type InboundMessage, type InboundAttachment, LIMITS } from "./protocol";
 import { MIME_MAP, sanitizeFileName, createRateLimiter, cleanInbox } from "./utils";
+import { parseCliOptions } from "./cli-options";
+import {
+  type CodexUserInputQuestion,
+  toAppQuestions,
+  toCodexAnswers,
+} from "./user-input";
 
 const RELAY_URL = process.env.AIGHT_RELAY_URL || "https://channels.aight.cool";
 const CODEX_BIN = process.env.CODEX_BIN || "codex";
@@ -37,6 +43,13 @@ const CODE_FILE = join(STATE_DIR, `pairing-code-${process.pid}.txt`);
 // AIGHT_CODEX_CWD; fall back to process.cwd() if it's missing (e.g. direct
 // `bun src/index.ts` invocation from inside the plugin dir).
 const threadCwd = process.env.AIGHT_CODEX_CWD || process.cwd();
+let cliOptions;
+try {
+  cliOptions = parseCliOptions(process.argv.slice(2));
+} catch (err) {
+  console.error(`[aight-codex] ${(err as Error).message}`);
+  process.exit(2);
+}
 
 mkdirSync(INBOX_DIR, { recursive: true, mode: 0o700 });
 cleanInbox(INBOX_DIR, LIMITS.MAX_INBOX_SIZE);
@@ -53,6 +66,10 @@ const pendingApprovals: Map<
   string,
   { requestId: number | string; timeoutHandle: NodeJS.Timeout }
 > = new Map();
+let pendingUserInput: {
+  requestId: number | string;
+  questions: CodexUserInputQuestion[];
+} | null = null;
 
 // ─── Setup ──────────────────────────────────────────────────────────────────
 
@@ -72,8 +89,8 @@ await codex.initialize({ name: "aight-codex-plugin", version: "0.1.0" });
 try {
   const result = await codex.startThread({
     cwd: threadCwd,
-    approvalPolicy: "on-request",
-    sandbox: "workspace-write",
+    approvalPolicy: cliOptions.approvalPolicy,
+    sandbox: cliOptions.sandbox,
   });
   threadId = result.thread.id;
   console.log(`[aight-codex] thread started: ${threadId} (cwd: ${threadCwd})`);
@@ -169,6 +186,26 @@ codex.on("notification", (method: string, params: unknown) => {
 // Server-initiated JSON-RPC requests from Codex (approvals, etc).
 // Schema source: `codex app-server generate-ts` (ServerRequest.ts).
 codex.on("request", (method: string, params: unknown, requestId: number | string) => {
+  if (method === "item/tool/requestUserInput") {
+    const p = (params ?? {}) as Record<string, unknown>;
+    const questions = Array.isArray(p.questions)
+      ? (p.questions as CodexUserInputQuestion[])
+      : [];
+    if (questions.length === 0 || pendingUserInput) {
+      codex.respondError(requestId, -32602, "invalid or concurrent user-input request");
+      return;
+    }
+    const itemId = String(p.itemId ?? requestId);
+    pendingUserInput = { requestId, questions };
+    relay.send({
+      type: "ask_user_question",
+      questionId: itemId,
+      questions: toAppQuestions(questions),
+      timestamp: new Date().toISOString(),
+    });
+    return;
+  }
+
   if (
     method !== "item/commandExecution/requestApproval" &&
     method !== "item/fileChange/requestApproval"
@@ -290,6 +327,20 @@ async function handleInboundMessage(data: InboundMessage): Promise<void> {
     return;
   }
 
+  if (pendingUserInput) {
+    const pending = pendingUserInput;
+    pendingUserInput = null;
+    codex.respond(pending.requestId, toCodexAnswers(pending.questions, data.content));
+    if (data.id) {
+      relay.send({
+        type: "ack",
+        messageId: data.id,
+        timestamp: new Date().toISOString(),
+      });
+    }
+    return;
+  }
+
   const savedPaths: string[] = [];
   if (data.attachments?.length) {
     for (const att of data.attachments) {
@@ -382,6 +433,10 @@ function cleanup() {
     }
   }
   for (const [id] of pendingApprovals) sendApprovalDecision(id, "denied");
+  if (pendingUserInput) {
+    codex.respondError(pendingUserInput.requestId, -32800, "client disconnected");
+    pendingUserInput = null;
+  }
   codex.close().catch(() => undefined);
 }
 process.on("exit", cleanup);
